@@ -2,11 +2,16 @@
 '''
 import re
 import os
+import time
+from random import randint
+from pprint import pprint
 
 import openai
+import backoff
 from PyPDF2 import PdfFileReader as reader
 
 
+@backoff.on_exception(backoff.expo, openai.error.RateLimitError)
 def parse_with_codex(st):
     response = openai.Completion.create(
         model="text-davinci-002",
@@ -18,7 +23,7 @@ def parse_with_codex(st):
         presence_penalty=0
     )
     
-    return response['choices']['text']
+    return {r['text'].strip().replace('"','').lower() for r in response['choices']}
 
 
 def split_string(string):
@@ -27,12 +32,14 @@ def split_string(string):
     
 
 def main():
+    start_time = time.perf_counter()
     openai.api_key = os.getenv("OPENAI_API_KEY")
     
     section = 'REFERENCES'
     pdf = reader('test.pdf')
     
     from_here = False
+    citations = set()
     for i in range(len(pdf.pages)):
         text = pdf.getPage(i).extractText()
         
@@ -42,10 +49,13 @@ def main():
             
         if from_here:
             for st in split_string(text):
-                if len(st) > 7: 
-                    resp = parse_with_codex(st.split('.')[1].strip()+'\n')
-                    print(resp)
-            break
+                if len(st) > 7: # arbitrary parameter for removing misc. strings
+                    citations.update(parse_with_codex(st.split('.')[1].strip()+'\n'))
+                    time.sleep(60+randint(0, 10))
+            # break
+        
+    pprint([a.title() for a in citations])
+    print(f'time: {time.perf_counter() - start_time} seconds')
             
             
 
