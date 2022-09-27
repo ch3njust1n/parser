@@ -3,8 +3,7 @@
 import re
 import os
 import time
-from random import randint
-from pprint import pprint
+import json
 
 import openai
 import backoff
@@ -23,12 +22,12 @@ def parse_with_codex(st):
         presence_penalty=0
     )
     
-    return {r['text'].strip().replace('"','').lower() for r in response['choices']}
+    return {r['text'].strip().replace('"','').replace('\n', ' ').lower() for r in response['choices']}
 
 
 def split_string(string):
     string = string.replace('\n', ' ')
-    return re.split(',*\s*[0-9]+[a-zA-Z]*\.', string)
+    return re.split(', \d{4}+\.', string)
     
 
 def main():
@@ -48,13 +47,21 @@ def main():
             text = ' '.join(text.split(section)[1:])
             
         if from_here:
+            print(f'\nparsing page {i}...')
+            
             for st in split_string(text):
                 if len(st) > 7: # arbitrary parameter for removing misc. strings
-                    citations.update(parse_with_codex(st.split('.')[1].strip()+'\n'))
-                    time.sleep(60+randint(0, 10))
-            # break
+                    try:
+                        parsed = parse_with_codex(st.split('.')[1].strip()+'\n')
+                        citations.update(parsed)
+                    except IndexError:
+                        break
         
-    pprint([a.title() for a in citations])
+    citations = [a.title() for a in citations if len(a.strip()) > 0]
+    
+    with open('test.json', 'w') as f:
+        json.dump(citations, f, indent=4, sort_keys=True)
+    
     print(f'time: {time.perf_counter() - start_time} seconds')
             
             
