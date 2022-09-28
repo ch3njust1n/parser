@@ -1,37 +1,77 @@
 '''
+Justin Chen
+
+Parse research papers
+
+9/26/2022
 '''
-from genericpath import isdir
 import re
 import os
 import time
 import json
 import logging
+import itertools
 
 import openai
 import backoff
+import numpy as np
 from PyPDF2 import PdfFileReader as reader
+
 
 '''
 Return Unix Epoch time in milliseconds
 '''
 def unix_epoch():
-    decimals = len(str(time.time()).split('.'))
-    return int(time.time() * 10**decimals)
+	decimals = len(str(time.time()).split('.'))
+	return int(time.time() * 10**decimals)
 
 
 @backoff.on_exception(backoff.expo, openai.error.RateLimitError)
-def parse_with_codex(st):
-	response = openai.Completion.create(
-		model="text-davinci-002",
-		prompt=f"Remove misc. substrings from the paper title and format the title correctly and ignore any strings that appear to be parts of URLs: \n\"{st}\"",
-		temperature=0.97,
-		max_tokens=3800,
-		top_p=1,
-		frequency_penalty=0,
-		presence_penalty=0
-	)
+def parse_with_codex(prompt, logname):
+	log = logging.getLogger(logname)
 	
-	return {r['text'].strip().replace('"','').replace('\n', ' ').lower() for r in response['choices']}
+	try:
+		return openai.Completion.create(
+			model="text-davinci-002",
+			prompt=prompt,
+			temperature=0.97,
+			max_tokens=3700,
+			top_p=1,
+			frequency_penalty=0,
+			presence_penalty=0
+		)
+	except openai.error.InvalidRequestError:
+		log.debug(prompt)
+
+
+def grouping(nums):
+	avg = np.average(nums)
+	std = np.std(nums)
+	results = []
+	indices = []
+	for i, n in enumerate(nums):
+		if n > avg - std:
+			indices.append(i)
+		elif len(indices):
+			results.append(indices)
+			indices = []
+	return results
+
+
+def longest_sublist(lst):
+	longest = []
+	for i in lst:
+		if len(i) > len(longest):
+			longest = i
+	return longest
+
+
+def endpoints(lst):
+	return lst[0], lst[-1]
+
+
+def flatten(lst):
+	return [i for i in itertools.chain.from_iterable(lst) if i.strip()]
 
 
 def split_string(string):
@@ -44,6 +84,7 @@ def format_filename(filename):
 
 
 def extract_abstract(paper_path, logname):
+	log = logging.getLogger(logname)
 	section = 'abstract'
 	pdf = reader(paper_path)
 	title = paper_path.split('/')[-1].split('.')[0]
@@ -61,14 +102,23 @@ def extract_abstract(paper_path, logname):
 			break
 
 	if abstract_line_number != -1 and intro_line_number != -1:
-		print(' '.join(page[abstract_line_number+1:intro_line_number]))
+		log.info(' '.join(page[abstract_line_number+1:intro_line_number]))
 	elif abstract_line_number != -1 and intro_line_number == -1:
-		print(' '.join(page[abstract_line_number+1:]))
+		log.info(' '.join(page[abstract_line_number+1:]))
 	else:
-		log = logging.getLogger(logname)
-		log.debug(f"{title} does not contain abstract section")
-		log.debug(first_page)
-		log.debug('\n\n')
+		line_heights = [len(line) for line in first_page.split('\n')]
+		start, end = endpoints(longest_sublist(grouping(line_heights)))
+		sub_prompt = first_page.split('\n')[start:end+1]
+  
+		prompt = f"Only extract and output the abstract from and correct spelling and grammar and split substrings into individual words:\n\"{sub_prompt}\"\n"
+		response = parse_with_codex(prompt, logname)
+		unformatted_abstract = flatten([r['text'].strip().split('\n') for r in response['choices']]).pop()
+  
+		prompt = f"Correct the spelling and grammar and split substrings into individual words:\n\"{unformatted_abstract}\"\n"
+		response = parse_with_codex(prompt, logname)
+  
+		log.info([r['text'].strip().replace('"','').replace('\n', ' ') for r in response['choices']].pop())
+
 
 def extract_citations(paper_path, logname):
 	section = 'REFERENCES'
@@ -89,7 +139,10 @@ def extract_citations(paper_path, logname):
 			for st in split_string(text):
 				if len(st) > 7: # arbitrary parameter for removing misc. strings
 					try:
-						parsed = parse_with_codex(st.split('.')[1].strip()+'\n')
+						sub_prompt = st.split('.')[1].strip()+'\n'
+						prompt = f"Remove misc. substrings from the paper title and format the title correctly and ignore any strings that appear to be parts of URLs: \n\"{sub_prompt}\""
+						response = parse_with_codex(prompt, logname)
+						parsed = {r['text'].strip().replace('"','').replace('\n', ' ').lower() for r in response['choices']}
 						citations.update(parsed)
 					except IndexError:
 						break
@@ -112,7 +165,7 @@ def main():
 	print(f'log file: {logname}')
   
 	logging.basicConfig(
-		level=logging.DEBUG, 
+		level=logging.INFO, 
 		filename=f'logs/{logname}',
 		filemode='w', 
 		format='%(levelname)s - %(message)s'
@@ -122,6 +175,7 @@ def main():
  
 	for i in range(len(os.listdir('test_pdfs'))):
 		paper = f'test_pdfs/{i}.pdf'
+		print(f'parsing paper: {i}')
 		
 		if not os.path.exists(paper):
 			raise ValueError(f'File {paper} does not exist')
@@ -131,8 +185,6 @@ def main():
 	
 		if section == 'abstract':
 			extract_abstract(paper, logname)
-   
-		print('\n==================\n')
 
 	print(f'time: {time.perf_counter() - start_time} seconds')
 
