@@ -117,7 +117,9 @@ def extract_abstract(paper_path, logname):
 		prompt = f"Correct the spelling and grammar and split substrings into individual words:\n\"{unformatted_abstract}\"\n"
 		response = parse_with_codex(prompt, logname)
   
-		log.info([r['text'].strip().replace('"','').replace('\n', ' ') for r in response['choices']].pop())
+		codex_extract = [r['text'].strip().replace('"','').replace('\n', ' ') for r in response['choices']].pop()
+		codex_extract = f'{codex_extract} (extracted by OpenAI Codex)'
+		log.info(codex_extract)
 
 
 def extract_citations(paper_path, logname):
